@@ -4,6 +4,9 @@ using System.Text.RegularExpressions;
 using Kingmaker;
 using Kingmaker.Blueprints;
 using SpeechMod.Unity;
+using System.Collections.Generic;
+using System.Diagnostics;
+using UniRx.Diagnostics;
 
 #if DEBUG
 using System.Reflection;
@@ -108,17 +111,58 @@ public class WindowsSpeech : ISpeech
     public string PrepareSpeechText(string text)
     {
 #if DEBUG
+        Main.Logger?.Log("Enter 1");
         UnityEngine.Debug.Log(text);
 #endif
         text = new Regex("<[^>]+>").Replace(text, "");
         text = text.PrepareText();
         text = $"{CombinedNarratorVoiceStart}{text}</voice>";
 
+        string pattern = @"(?<=\/>|>)([^<]+)";
+        Regex regex = new Regex(pattern);
+        Match match = regex.Match(text);
+        text = match.Groups[1].Value;
+        //Thread the process so that the program does not wait until it is done running
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate
+        {
+            Process process = new Process();
+            process.StartInfo.FileName = "edge-playback";
+            text = text.Replace("~", "");
+            text = text.Replace("-", "");
+            text = text.Replace("_", "");
+            text = text.Replace(":", "\\:");
+            text = text.Replace("/", "\\/");
+            process.StartInfo.Arguments = $"-v \"en-IE-EmilyNeural\" -t \"{text}\"";
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            process.StartInfo.UseShellExecute = true;
+            process.StartInfo.RedirectStandardOutput = false;
+            process.StartInfo.CreateNoWindow = true;
+            process.Start();
+        });
 #if DEBUG
         if (Assembly.GetEntryAssembly() == null)
-            UnityEngine.Debug.Log(text);
+            Main.Logger?.Warning("Invalid " + text);
+        UnityEngine.Debug.Log(text);
 #endif
         return text;
+    }
+
+    private string GetEdgePlaybackCommand(string text)
+    {
+        string command = $"/c start /b edge-playback -v \"en-IE-EmilyNeural\" -t \"{text}\"";
+        Process process = new Process();
+        process.StartInfo.FileName = "cmd.exe";
+        process.StartInfo.Arguments = $"/c set edgeplayback \"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\" \"/profile-directory=Default\" & set edgeplayback & {command}";
+        process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.Start();
+
+        string output = process.StandardOutput.ReadToEnd();
+        string[] outputlines = output.Split('\n');
+        string cmd = outputlines[4].TrimEnd('\r');
+
+        return cmd + " && " + command;
     }
 
     public string PrepareDialogText(string text)
@@ -179,13 +223,82 @@ public class WindowsSpeech : ISpeech
         WindowsVoiceUnity.Stop();
     }
 
-    public string[] GetAvailableVoices()
-    {
-        return WindowsVoiceUnity.GetAvailableVoices();
-    }
-
     public string GetStatusMessage()
     {
-        return WindowsVoiceUnity.GetStatusMessage();
+        if (WindowsVoiceUnity.IsSpeaking)
+        {
+            return "Speaking";
+        }
+        else
+        {
+            try
+            {
+                Process[] processes = Process.GetProcessesByName("edge-playback");
+                if (processes.Length > 0)
+                {
+                    return "Playing (edge-playback)";
+                }
+                else
+                {
+                    return "Ready";
+                }
+            }
+            catch (Exception ex)
+            {
+                return "Error: " + ex.Message;
+            }
+        }
+    }
+
+    public string[] GetAvailableVoices()
+    {
+        try
+        {
+            string voicesList = RunEdgePlaybackCommand("--list-voices");
+            List<string> availableVoices = new List<string>();
+            Main.Logger?.Log(voicesList);
+
+            // Split the output by lines
+            string[] lines = voicesList.Split('\n');
+            string currentVoice = null;
+
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("Name: "))
+                {
+                    currentVoice = line.Replace("Name: ", "").Trim();
+                }
+                else if (line.StartsWith("Gender: "))
+                {
+                    string gender = line.Replace("Gender: ", "").Trim();
+                    if (currentVoice != null)
+                    {
+                        availableVoices.Add($"{currentVoice}#{gender}");
+                    }
+                }
+            }
+
+            return availableVoices.ToArray();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error getting available voices: {ex}");
+            return new string[0];
+        }
+    }
+
+    private static string RunEdgePlaybackCommand(string arguments)
+    {
+        try
+        {
+            string output = "Name: en-IE-EmilyNeural\nGender: Female";
+
+            return output;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error running edge-playback command: {ex}");
+            return string.Empty;
+        }
     }
 }
