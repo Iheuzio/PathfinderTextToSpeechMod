@@ -7,6 +7,9 @@ using SpeechMod.Unity;
 using System.Collections.Generic;
 using System.Diagnostics;
 using UniRx.Diagnostics;
+using System.Threading;
+using System.IO;
+
 
 #if DEBUG
 using System.Reflection;
@@ -108,6 +111,25 @@ public class WindowsSpeech : ISpeech
         WindowsVoiceUnity.Speak(text, Length(text));
     }
 
+    private string[] SplitText(string text, int wordsPerFile)
+    {
+        // Your text processing logic here to prepare the text as needed
+
+        // Split text into an array based on wordsPerFile
+        string[] words = text.Split(' ');
+        int totalFiles = (int)Math.Ceiling((double)words.Length / wordsPerFile);
+        string[] textArray = new string[totalFiles];
+
+        for (int i = 0; i < totalFiles; i++)
+        {
+            int startIndex = i * wordsPerFile;
+            int endIndex = Math.Min((i + 1) * wordsPerFile, words.Length);
+            textArray[i] = string.Join(" ", words, startIndex, endIndex - startIndex);
+        }
+
+        return textArray;
+    }
+
     public string PrepareSpeechText(string text)
     {
 #if DEBUG
@@ -121,48 +143,89 @@ public class WindowsSpeech : ISpeech
         string pattern = @"(?<=\/>|>)([^<]+)";
         Regex regex = new Regex(pattern);
         Match match = regex.Match(text);
-        text = match.Groups[1].Value;
-        //Thread the process so that the program does not wait until it is done running
-        System.Threading.ThreadPool.QueueUserWorkItem(delegate
+        var allText = match.Groups;
+        // combine all text into one string
+        text = "";
+        foreach (var item in allText)
         {
-            Process process = new Process();
-            process.StartInfo.FileName = "edge-playback";
-            text = text.Replace("~", "");
-            text = text.Replace("-", "");
-            text = text.Replace("_", "");
-            text = text.Replace(":", "\\:");
-            text = text.Replace("/", "\\/");
-            process.StartInfo.Arguments = $"-v \"en-IE-EmilyNeural\" -t \"{text}\"";
-            process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
-            process.StartInfo.UseShellExecute = true;
-            process.StartInfo.RedirectStandardOutput = false;
-            process.StartInfo.CreateNoWindow = true;
-            process.Start();
+            text += item;
+        }
+        // if process is already running, wait for it to finish
+        // otherwise, start a new process
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            ProcessText(text);
+            PlayFile("file.mp3");
+            DeleteFile("file.mp3");
         });
 #if DEBUG
-        if (Assembly.GetEntryAssembly() == null)
+        if (System.Reflection.Assembly.GetEntryAssembly() == null)
             Main.Logger?.Warning("Invalid " + text);
         UnityEngine.Debug.Log(text);
 #endif
         return text;
     }
 
-    private string GetEdgePlaybackCommand(string text)
+    private void DeleteFile(string filePath)
     {
-        string command = $"/c start /b edge-playback -v \"en-IE-EmilyNeural\" -t \"{text}\"";
-        Process process = new Process();
-        process.StartInfo.FileName = "cmd.exe";
-        process.StartInfo.Arguments = $"/c set edgeplayback \"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\" \"/profile-directory=Default\" & set edgeplayback & {command}";
-        process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
-        process.StartInfo.UseShellExecute = false;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.Start();
+        if (File.Exists(filePath))
+        {
+           using Process process = new Process();
+            {
+                File.Delete(filePath);
+            }
+        }
+        Main.Logger?.Log("Deleted file: " + filePath);
+    }
 
-        string output = process.StandardOutput.ReadToEnd();
-        string[] outputlines = output.Split('\n');
-        string cmd = outputlines[4].TrimEnd('\r');
+    private void PlayFile(string filePath)
+    {
+       // check if file exists
+       if (!File.Exists(filePath))
+        {
+            Main.Logger?.Warning("File does not exist: " + filePath);
+            return;
+        }
 
-        return cmd + " && " + command;
+        // play the file using c# library
+        using (Process process = new Process())
+        {
+            process.StartInfo.FileName = "powershell";
+            process.StartInfo.Arguments = $"mpv {filePath}";
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            process.StartInfo.UseShellExecute = false;
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.CreateNoWindow = true;
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
+            process.Start();
+            process.WaitForExit();
+            process.Close();
+        }
+    }
+
+    private void ProcessText(string text)
+    {
+        // Your text processing logic here
+
+        // Use fileIndex to generate unique file names
+        //string fileName = $"file{fileIndex + 1}.mp3";
+       string fileName = "file.mp3";
+
+        using (Process process = new Process())
+        {
+            process.StartInfo.FileName = "edge-tts";
+            // Your other process setup logic here
+
+            process.StartInfo.Arguments = $"-v \"en-IE-EmilyNeural\" -t \"{text}\" --write-media {fileName}";
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            process.StartInfo.UseShellExecute = false;
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.CreateNoWindow = true;
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
+            process.Start();
+            process.WaitForExit();
+            process.Close();
+        }
     }
 
     public string PrepareDialogText(string text)
