@@ -134,22 +134,22 @@ public class WindowsSpeech : ISpeech
     {
 #if DEBUG
         Main.Logger?.Log("Enter 1");
-        UnityEngine.Debug.Log(text);
+        UnityEngine.Debug.Log("Init text: " + text);
 #endif
         text = new Regex("<[^>]+>").Replace(text, "");
         text = text.PrepareText();
+        Main.Logger?.Log("New text defined: " + text);
         text = $"{CombinedNarratorVoiceStart}{text}</voice>";
 
         string pattern = @"(?<=\/>|>)([^<]+)";
         Regex regex = new Regex(pattern);
-        Match match = regex.Match(text);
-        var allText = match.Groups;
-        // combine all text into one string
-        text = "";
-        foreach (var item in allText)
+        text = Regex.Replace(text, @"<silence(?:\s+msec=""(\d+)"")?\/>", match =>
         {
-            text += item;
-        }
+            return match.Groups[1].Success ? "..." : "";
+        });
+        Match match = regex.Match(text);
+        text = match.Groups[1].Value;
+
         // if process is already running, wait for it to finish
         // otherwise, start a new process
         ThreadPool.QueueUserWorkItem(delegate
@@ -165,6 +165,7 @@ public class WindowsSpeech : ISpeech
 #endif
         return text;
     }
+
 
     private void DeleteFile(string filePath)
     {
@@ -296,10 +297,10 @@ public class WindowsSpeech : ISpeech
         {
             try
             {
-                Process[] processes = Process.GetProcessesByName("edge-playback");
+                Process[] processes = Process.GetProcessesByName("edge-tts");
                 if (processes.Length > 0)
                 {
-                    return "Playing (edge-playback)";
+                    return "Playing (edge-tts)";
                 }
                 else
                 {
