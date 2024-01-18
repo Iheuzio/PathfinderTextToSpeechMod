@@ -24,8 +24,8 @@ namespace SpeechMod.Unity
             // Create a process to run the edge-playback command with the specified voice and text
             ProcessStartInfo psi = new ProcessStartInfo
             {
-                FileName = "cmd.exe",
-                Arguments = $"edge-playback -v \"en - IE - EmilyNeural\"-t \"{text}\"",
+                FileName = "edge-playback",
+                Arguments = $"-v \"en - IE - EmilyNeural\"-t \"{text}\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -39,6 +39,8 @@ namespace SpeechMod.Unity
             };
 
             process.Start();
+            process.WaitForExit();
+            process.Close();
         }
 
         public static void Stop()
