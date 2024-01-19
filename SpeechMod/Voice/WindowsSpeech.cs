@@ -9,6 +9,8 @@ using System.Diagnostics;
 using UniRx.Diagnostics;
 using System.Threading;
 using System.IO;
+using Kingmaker.Utility;
+using System.Threading.Tasks;
 
 
 #if DEBUG
@@ -136,27 +138,23 @@ public class WindowsSpeech : ISpeech
         Main.Logger?.Log("Enter 1");
         UnityEngine.Debug.Log("Init text: " + text);
 #endif
+        string[] textArr;
         text = new Regex("<[^>]+>").Replace(text, "");
         text = text.PrepareText();
-        Main.Logger?.Log("New text defined: " + text);
-        text = $"{CombinedNarratorVoiceStart}{text}</voice>";
+        // separate each new line into a separate string then add to an array of strings called textArray
+        textArr = text.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
+        UnityEngine.Debug.Log("After adding stuff: " + text);
+        UnityEngine.Debug.Log("Text length: " + textArr.Length);
 
         string pattern = @"(?<=\/>|>)([^<]+)";
         Regex regex = new Regex(pattern);
-        text = Regex.Replace(text, @"<silence(?:\s+msec=""(\d+)"")?\/>", match =>
-        {
-            return match.Groups[1].Success ? "..." : "";
-        });
-        Match match = regex.Match(text);
-        text = match.Groups[1].Value;
+        textArr = textArr.Select(item => Regex.Replace(item, @"<silence(?:\s+msec=""(\d+)"")?\/>", match => match.Groups[1].Success ? "..." : "")).ToArray();
 
         // if process is already running, wait for it to finish
         // otherwise, start a new process
         ThreadPool.QueueUserWorkItem(delegate
         {
-            ProcessText(text);
-            PlayFile("file.mp3");
-            DeleteFile("file.mp3");
+            ProcessText(textArr);
         });
 #if DEBUG
         if (System.Reflection.Assembly.GetEntryAssembly() == null)
@@ -166,29 +164,70 @@ public class WindowsSpeech : ISpeech
         return text;
     }
 
+    private Queue<string> filesToPlay = new Queue<string>();
+    private bool isPlaying = false;
+    private SemaphoreSlim semaphore = new SemaphoreSlim(1, 1); // Initialize semaphore with count 1
+    private object lockObject = new object(); // Synchronous lock
 
     private void DeleteFile(string filePath)
     {
         if (File.Exists(filePath))
         {
-           using Process process = new Process();
+            File.Delete(filePath);
+        }
+    }
+
+    private void WaitForExit(Process process)
+    {
+        process.WaitForExit();
+    }
+
+    private void ProcessAndPlayFile(string item, int count)
+    {
+        string fileName = $"file{count}.mp3";
+        string filePath = null;
+
+        using (Process process = new Process())
+        {
+            process.StartInfo.FileName = "edge-tts";
+            process.StartInfo.Arguments = $"-v \"en-IE-EmilyNeural\" -t \"{item}\" --write-media {fileName}";
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            process.StartInfo.UseShellExecute = false;
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.CreateNoWindow = true;
+            process.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
+            process.Start();
+
+            WaitForExit(process);
+
+            process.Close();
+        }
+
+        lock (lockObject) // Use synchronous lock for accessing shared data
+        {
+            filesToPlay.Enqueue(fileName);
+
+            if (!isPlaying)
             {
-                File.Delete(filePath);
+                isPlaying = true;
+                filePath = filesToPlay.Dequeue();
             }
         }
-        Main.Logger?.Log("Deleted file: " + filePath);
+
+        if (filePath != null)
+        {
+            UnityEngine.Debug.Log("File path: " + filePath);
+            PlayFile(filePath);
+        }
+
+        lock (lockObject) // Use synchronous lock for updating shared data
+        {
+            isPlaying = false;
+        }
     }
 
     private void PlayFile(string filePath)
     {
-       // check if file exists
-       if (!File.Exists(filePath))
-        {
-            Main.Logger?.Warning("File does not exist: " + filePath);
-            return;
-        }
-
-        // play the file using c# library
         using (Process process = new Process())
         {
             process.StartInfo.FileName = "powershell";
@@ -199,33 +238,22 @@ public class WindowsSpeech : ISpeech
             process.StartInfo.CreateNoWindow = true;
             process.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
             process.Start();
-            process.WaitForExit();
+
+            WaitForExit(process);
+
             process.Close();
         }
+
+        DeleteFile(filePath);
     }
 
-    private void ProcessText(string text)
+    private void ProcessText(string[] text)
     {
-        // Your text processing logic here
+        int count = 0;
 
-        // Use fileIndex to generate unique file names
-        //string fileName = $"file{fileIndex + 1}.mp3";
-       string fileName = "file.mp3";
-
-        using (Process process = new Process())
+        foreach (var item in text)
         {
-            process.StartInfo.FileName = "edge-tts";
-            // Your other process setup logic here
-
-            process.StartInfo.Arguments = $"-v \"en-IE-EmilyNeural\" -t \"{text}\" --write-media {fileName}";
-            process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
-            process.StartInfo.UseShellExecute = false;
-            process.StartInfo.RedirectStandardOutput = true;
-            process.StartInfo.CreateNoWindow = true;
-            process.StartInfo.WindowStyle = ProcessWindowStyle.Minimized;
-            process.Start();
-            process.WaitForExit();
-            process.Close();
+            ProcessAndPlayFile(item, count++);
         }
     }
 
